@@ -1,0 +1,22 @@
+{
+    "name": "lambda-template",
+    "version": "1.0.0",
+    "description": "",
+    "main": "handler.mjs",
+    "scripts": {
+        "test": "jest",
+        "docs": "jsdoc -c jsdoc.json",
+        "prettier": "prettier --write ."
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+        "jest": "^29.7.0",
+        "jsdoc": "^4.0.3",
+        "prettier": "^3.3.1"
+    },
+    "dependencies": {
+        "uuid": "^10.0.0"
+    }
+}
