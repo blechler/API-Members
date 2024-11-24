@@ -1,10 +1,12 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
+import { getAuras } from './ddb/auras.mjs';
 import { getGroups } from './ddb/groups.mjs';
 import { getClasses } from './ddb/classes.mjs';
 import { getMember, getMembers, getMembersByOwner } from './ddb/member.mjs';
 import { getRaces } from './ddb/races.mjs';
+import { uploadImage } from './s3/s3.mjs';
 
 const client = new DynamoDBClient({ region: 'ca-central-1' });
 const ddbDocClient = DynamoDBDocument.from(client);
@@ -39,23 +41,45 @@ export async function handler(event, context, callback) {
 
     switch(httpMethod) {
         case "GET":
-           objResponse = await handleGet(event);
-           break;
+            objResponse = await handleGet(event);
+            break;
         case "PUT":
-           objResponse = await handlePut(event);
-           break;
+            objResponse = await handlePut(event);
+            break;
         case "POST":
-           objOut.statusCode = 405;
-           break;
+            objResponse = await handlePost(event);
+            break;
         default:
-           objOut.statusCode = 405;
-           break;
+            objOut.statusCode = 405;
+            break;
     }
      
     objOut = { ...objOut, ...objResponse };
     objOut.body = JSON.stringify(objOut.body);
     return objOut;
 }
+
+const handlePost = async (event) => {
+    // Step 1: Extract user's groups from the event
+    // This is a placeholder; you'll need to adjust it based on how groups are passed in your setup
+    const userGroups = event.requestContext.authorizer.claims['cognito:groups']?.split(',') || [];
+    console.log('userGroups:', userGroups);
+
+    // Step 2: Check for required group membership
+    const requiredGroups = ['MemberEditors', 'Deity', 'Administrator'];
+    const isAuthorized = userGroups.some(group => requiredGroups.includes(group));
+
+    if (!isAuthorized) {
+        console.log('event.requestContext.authorizer:', event.requestContext.authorizer);
+        // User does not have the required permissions
+        return { statusCode: 403, body: JSON.stringify({ message: "Unauthorized" }) };
+    }
+
+    let arPath = event.path.split('/');
+    arPath.shift();
+
+    let task = arPath.slice(-1)[0];
+};
 
 /**
  * Handle GET method
@@ -75,6 +99,8 @@ const handleGet = async (event) => {
                     return await getCharacters(event);
                 case 'classes':
                     return await getClasses(event); // Get all classes from the DDB table 'Classes' (see src/ddb/classes.mjs)
+                case 'auras':
+                    return await getAuras(event); // Get all colors from the DDB table 'Colors' (see src/ddb/colors.mjs)
                 case 'groups':
                     return await getGroups(); // Get all groups from the DDB table 'Groups' (see src/ddb/groups.mjs)
                 case 'member':
