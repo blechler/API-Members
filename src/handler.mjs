@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getAuras } from './ddb/auras.mjs';
 import { getGroups } from './ddb/groups.mjs';
 import { getClasses } from './ddb/classes.mjs';
-import { getMember, getMembers, getMembersByOwner } from './ddb/member.mjs';
+import { getMember, getMembers, getMembersByOwner, putMember, postMember } from './ddb/member.mjs';
 import { getRaces } from './ddb/races.mjs';
 import { uploadImage } from './s3/s3.mjs';
 
@@ -20,7 +20,6 @@ const ddbDocClient = DynamoDBDocument.from(client);
  * @returns {Object} - The response object.
  */
 export async function handler(event, context, callback) {
-    console.log('event:', event);
     const httpMethod = event.httpMethod;
 
     let objOut = {
@@ -72,13 +71,40 @@ const handlePost = async (event) => {
     if (!isAuthorized) {
         console.log('event.requestContext.authorizer:', event.requestContext.authorizer);
         // User does not have the required permissions
-        return { statusCode: 403, body: JSON.stringify({ message: "Unauthorized" }) };
+        return { statusCode: 403, body: { message: "Unauthorized" } };
     }
 
     let arPath = event.path.split('/');
     arPath.shift();
 
     let task = arPath.slice(-1)[0];
+
+    switch(task) {
+        case 'member':
+            return await addMember(event);
+        default:
+            return { statusCode: 405 };
+    }
+};
+
+const addMember = async (event) => {
+    try {
+        const { headers } = event;
+        const contentType = headers['Content-Type'] || headers['content-type'];
+
+        const uploadImageResponse = await uploadImage(event);
+        if (uploadImageResponse.statusCode !== 200) {
+            return uploadImageResponse;
+        }
+        console.log('uploadImageResponse:', uploadImageResponse);
+        await postMember(uploadImageResponse.body.memberData);
+    } catch (err) {
+        console.error("Error processing request:", err);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ message: 'Failed to process request', error: err.message })
+        };
+    }
 };
 
 /**
@@ -137,7 +163,7 @@ const handlePut = async (event) => {
     if (!isAuthorized) {
         console.log('event.requestContext.authorizer:', event.requestContext.authorizer);
         // User does not have the required permissions
-        return { statusCode: 403, body: JSON.stringify({ message: "Unauthorized" }) };
+        return { statusCode: 403, body: { message: "Unauthorized" } };
     }
 
     // Existing function logic...
@@ -293,51 +319,4 @@ const countReportIdsByMemberId = async (memberId) => {
 
     objOut.body = { count: totalCount };
     return objOut;
-};
-
-const putMember = async (event) => {
-    const body = JSON.parse(event.body);
-    console.log('body:', body);
-
-    // Mapping incoming data to the required schema
-    const item = {
-        id: body.id || uuidv4(), // Generate a UUID if id is not provided
-        born: body.born,
-        caster_colour: body.caster_colour || null,
-        classes: body.classes || [],
-        colour_hex: body.colour_hex || null,
-        deleted: body.deleted || 0,
-        descript: body.descript || "",
-        died: body.died || 0,
-        ethnicity: body.ethnicity || "",
-        eyes: body.eyes || "",
-        groups: body.groups || [],
-        hair: body.hair || "",
-        height: body.height || "",
-        hp: body.hp || 0,
-        image: body.image ? body.image.substring(body.image.lastIndexOf('/') + 1) : "",
-        level: body.level || 0,
-        name: body.name || "",
-        old_id: body.old_id || null,
-        owner: body.owner || "",
-        pseudonym: body.pseudonym || "",
-        races: body.races || [],
-        religion: body.religion || "",
-        title: body.title || "",
-        tower_id: body.tower_id || null,
-        weight: body.weight || 0,
-    };
-
-    const params = {
-        TableName: 'potp-member-v2',
-        Item: item
-    };
-
-    try {
-        await ddbDocClient.put(params);
-        return { statusCode: 200, body: JSON.stringify({ message: "Member added successfully" }) };
-    } catch (err) {
-        console.error("Unable to add item. Error JSON:", JSON.stringify(err, null, 2));
-        return { statusCode: 500, body: JSON.stringify({ error: "Failed to add the member", details: err.message }) };
-    }
 };

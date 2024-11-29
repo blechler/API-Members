@@ -17,6 +17,7 @@
         "prettier": "^3.3.1"
     },
     "dependencies": {
+        "busboy": "^1.6.0",
         "uuid": "^10.0.0"
     }
 }
