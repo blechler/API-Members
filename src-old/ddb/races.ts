@@ -10,7 +10,7 @@ interface ApiResponse {
     body: any;
 }
 
-export const getRaces = async (event?: APIGatewayProxyEvent): Promise<ApiResponse> => {
+export const getRaces = async (_event?: APIGatewayProxyEvent): Promise<ApiResponse> => {
     const params = {
         TableName: 'potp-races-v2',
     };

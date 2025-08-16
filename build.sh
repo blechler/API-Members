@@ -7,7 +7,7 @@ rm -rf dist
 mkdir -p dist
 
 # Compile TypeScript (continue even with errors) and rename .js to .mjs
-/home/blechler/POTP/Lambdas/API-Contents/node_modules/.bin/tsc
+npx tsc
 find dist -name "*.js" -type f -exec sh -c 'mv "$1" "${1%.js}.mjs"' _ {} \;
 node fix-imports.js
 

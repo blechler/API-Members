@@ -68,7 +68,7 @@ export const getMemberById = async (event: APIGatewayProxyEvent): Promise<ApiRes
     }
 };
 
-export const getMembers = async (event?: APIGatewayProxyEvent): Promise<ApiResponse> => {
+export const getMembers = async (_event?: APIGatewayProxyEvent): Promise<ApiResponse> => {
     async function scanTable(accumulatedItems: any[] = [], lastEvaluatedKey: any = null): Promise<any[]> {
         const params: any = {
             TableName: 'potp-member-v2',

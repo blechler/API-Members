@@ -10,9 +10,9 @@ interface ApiResponse {
     body: any;
 }
 
-export const getGroups = async (): Promise<ApiResponse> => {
+export const getAuras = async (_event?: APIGatewayProxyEvent): Promise<ApiResponse> => {
     try {
-        const { Items } = await ddbDocClient.scan({ TableName: 'potp-member-groups-v2' });
+        const { Items } = await ddbDocClient.scan({ TableName: 'potp-auras' });
         return { statusCode: 200, body: Items };
     } catch (err) {
         return {

@@ -1,25 +1,14 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
-import { v4 as uuidv4 } from 'uuid';
-import { getAuras } from './ddb/auras.js';
-import { getGroups } from './ddb/groups.js';
-import { getClasses } from './ddb/classes.js';
-import { getMemberById, getMembers, getMembersByOwner, putMemberById, postMember } from './ddb/member.js';
-import { getRaces } from './ddb/races.js';
-import { updateImage, uploadImage } from './s3/s3.js';
-
-const client = new DynamoDBClient({ region: 'ca-central-1' });
-const ddbDocClient = DynamoDBDocument.from(client);
-
-interface ApiResponse {
-    statusCode: number;
-    body: any;
-}
-
-interface UserGroups {
-    groups?: string[];
-}
+import { MemberService } from './services/memberService.js';
+import { ImageService } from './services/imageService.js';
+import { checkMemberAuthorization, checkCharacterAccess } from './services/authService.js';
+import { 
+  sanitizeCreateMemberRequest, 
+  sanitizeUpdateMemberRequest, 
+  convertServiceResponse, 
+  getPathSegments 
+} from './utils/mappingUtils.js';
+import Busboy from 'busboy';
 
 /**
  * Main AWS Lambda handler for the Members API
@@ -28,356 +17,358 @@ interface UserGroups {
  * Supports GET, POST, PUT methods with proper CORS headers and error handling.
  */
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-    const httpMethod = event.httpMethod;
-    console.log(`${httpMethod} ${event.path}`);
+  const httpMethod = event.httpMethod;
+  console.log(`${httpMethod} ${event.path}`);
+  
+  let response: APIGatewayProxyResult = {
+    statusCode: 200,
+    headers: { 
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400'
+    },
+    body: ''
+  };
 
-    let objOut: APIGatewayProxyResult = {
-        statusCode: 200,
-        headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-            'Access-Control-Max-Age': '86400'
-        },
-        body: ''
-    };
+  try {
+    const memberService = new MemberService();
+    let result: { statusCode: number; body: any };
 
-    let objResponse: ApiResponse = { statusCode: 200, body: {} };
-    
-    let arPath = event.path.split('/');
-    arPath.shift();
-    console.log('httpMethod:', httpMethod);
-
-    try {
-        switch(httpMethod) {
-            case "GET":
-                objResponse = await handleGet(event);
-                break;
-            case "PUT":
-                objResponse = await handlePut(event);
-                break;
-            case "POST":
-                objResponse = await handlePost(event);
-                break;
-            case "OPTIONS":
-                objResponse = { statusCode: 200, body: { message: 'OK' } };
-                break;
-            default:
-                objOut.statusCode = 405;
-                objResponse = { statusCode: 405, body: { message: 'Method not allowed' } };
-                break;
-        }
-    } catch (error) {
-        console.error('Error in handler:', error);
-        objResponse = { 
-            statusCode: 500, 
-            body: { message: (error as Error).message } 
-        };
+    switch (httpMethod) {
+      case 'POST':
+        result = await handlePost(event, memberService);
+        break;
+      case 'GET':
+        result = await handleGet(event, memberService);
+        break;
+      case 'PUT':
+        result = await handlePut(event, memberService);
+        break;
+      case 'OPTIONS':
+        result = { statusCode: 200, body: { message: 'OK' } };
+        break;
+      default:
+        result = { statusCode: 405, body: { message: 'Method not allowed' } };
+        break;
     }
-     
-    objOut = { ...objOut, ...objResponse };
-    objOut.body = JSON.stringify(objResponse.body);
-    return objOut;
+
+    response.statusCode = result.statusCode;
+    response.body = JSON.stringify(result.body);
+
+  } catch (error) {
+    console.error('Error in handler:', error);
+    response.statusCode = 500;
+    response.body = JSON.stringify({ message: (error as Error).message });
+  }
+
+  return response;
 };
 
 /**
  * Handle POST requests for member creation
  */
-const handlePost = async (event: APIGatewayProxyEvent): Promise<ApiResponse> => {
-    const userGroups = extractUserGroups(event);
-    const requiredGroups = ['MemberEditors', 'Deity', 'Administrator'];
-    const isAuthorized = userGroups.some(group => requiredGroups.includes(group));
+async function handlePost(event: APIGatewayProxyEvent, memberService: MemberService): Promise<{ statusCode: number; body: any }> {
+  const pathSegments = getPathSegments(event.path);
+  
+  // Check authentication
+  const authResult = checkMemberAuthorization(event);
+  if (authResult.statusCode !== 200) {
+    return { statusCode: authResult.statusCode, body: { message: authResult.message || 'Unauthorized' }  };
+  }
 
-    if (!isAuthorized) {
-        return { statusCode: 403, body: { message: "Unauthorized" } };
-    }
+  if (pathSegments.length === 2 && pathSegments[0] === 'members' && pathSegments[1] === 'member') {
+    // POST /members/member - create single member
+    return await createMember(event, memberService);
+  }
 
-    let arPath = event.path.split('/');
-    arPath.shift();
-
-    let task = arPath.slice(-1)[0];
-
-    switch(task) {
-        case 'member':
-            return await addMember(event);
-        default:
-            return { statusCode: 405, body: { message: 'Invalid route' } };
-    }
-};
-
-/**
- * Add a new member with image upload
- */
-const addMember = async (event: APIGatewayProxyEvent): Promise<ApiResponse> => {
-    try {
-        const uploadImageResponse = await uploadImage(event);
-        if (uploadImageResponse.statusCode !== 200) {
-            return uploadImageResponse;
-        }
-        await postMember(uploadImageResponse.body.memberData);
-        return { statusCode: 201, body: uploadImageResponse.body };
-    } catch (err) {
-        console.error("Error processing request:", err);
-        return {
-            statusCode: 500,
-            body: { message: 'Failed to process request', error: (err as Error).message }
-        };
-    }
-};
+  return { statusCode: 400, body: { message: 'Invalid route' } };
+}
 
 /**
  * Handle GET requests for member and resource retrieval
  */
-const handleGet = async (event: APIGatewayProxyEvent): Promise<ApiResponse> => {
-    let arPath = event.path.split('/');
-    arPath.shift();
-    
-    switch (arPath[0]) {
-        case 'members':
-        case 'members-v2':
-            switch (arPath[1]) {
-                case undefined:
-                    return await getMembers(event);
-                case 'characters':
-                    return await getCharacters(event);
-                case 'classes':
-                    return await getClasses(event);
-                case 'auras':
-                    return await getAuras(event);
-                case 'groups':
-                    return await getGroups();
-                case 'member':
-                    return await getMemberById(event);
-                case 'races':
-                    return await getRaces(event);
-                case 'sessions':
-                    return await getSessions(event);
-                default:
-                    return { statusCode: 404, body: { message: 'Route not found' } };
-            }
-        default:
-            return { statusCode: 404, body: { message: 'Route not found' } };
+async function handleGet(event: APIGatewayProxyEvent, memberService: MemberService): Promise<{ statusCode: number; body: any }> {
+  const pathSegments = getPathSegments(event.path);
+
+  if (pathSegments.length === 0 || (pathSegments[0] !== 'members' && pathSegments[0] !== 'members-v2')) {
+    return { statusCode: 400, body: { message: 'Invalid route' } };
+  }
+
+  // Handle public endpoints without authentication
+  const publicEndpoints = ['classes', 'races', 'auras', 'groups'];
+  if (pathSegments.length === 2 && publicEndpoints.includes(pathSegments[1])) {
+    switch (pathSegments[1]) {
+      case 'classes':
+        const classesResponse = await memberService.getClasses();
+        return convertServiceResponse(classesResponse);
+      case 'races':
+        const racesResponse = await memberService.getRaces();
+        return convertServiceResponse(racesResponse);
+      case 'auras':
+        const aurasResponse = await memberService.getAuras();
+        return convertServiceResponse(aurasResponse);
+      case 'groups':
+        const groupsResponse = await memberService.getGroups();
+        return convertServiceResponse(groupsResponse);
     }
-};
+  }
+
+  // For member-specific endpoints, check authentication
+  if (pathSegments.length === 1 && (pathSegments[0] === 'members' || pathSegments[0] === 'members-v2')) {
+    // GET /members - get all members (no auth required for reading)
+    const serviceResponse = await memberService.getAllMembers();
+    return convertServiceResponse(serviceResponse);
+  }
+
+  if (pathSegments.length >= 2) {
+    const secondSegment = pathSegments[1];
+    
+    if (secondSegment === 'member') {
+      // GET /members/member/{id} - get member by ID
+      const memberId = pathSegments[2];
+      if (!memberId) {
+        return { statusCode: 400, body: { message: 'Member ID is required' } };
+      }
+      const serviceResponse = await memberService.getMemberById(memberId);
+      return convertServiceResponse(serviceResponse);
+    }
+    
+    if (secondSegment === 'characters') {
+      // GET /members/characters - get characters for user
+      const authResult = checkCharacterAccess(event, event.pathParameters?.sub);
+      if (authResult.statusCode !== 200) {
+        return { statusCode: authResult.statusCode, body: { message: authResult.message || 'Unauthorized' } };
+      }
+
+      const authClaims = event.requestContext?.authorizer?.claims;
+      const requestedSub = event.pathParameters?.sub;
+      const currentUserSub = authClaims?.sub;
+      const sub = requestedSub || currentUserSub;
+      
+      if (!sub) {
+        return { statusCode: 400, body: { message: 'User ID required' } };
+      }
+
+      const serviceResponse = await memberService.getMembersByOwner(sub);
+      return convertServiceResponse(serviceResponse);
+    }
+    
+    if (secondSegment === 'sessions') {
+      // GET /members/sessions/{memberId} or /members/sessions/{memberId}/count
+      const memberId = event.pathParameters?.id;
+      if (!memberId) {
+        return { statusCode: 400, body: { error: "Member ID is required" } };
+      }
+      
+      if (pathSegments.length === 4 && pathSegments[3] === 'count') {
+        const serviceResponse = await memberService.countSessionsByMemberId(memberId);
+        return convertServiceResponse(serviceResponse);
+      } else {
+        const serviceResponse = await memberService.getSessionsByMemberId(memberId);
+        return convertServiceResponse(serviceResponse);
+      }
+    }
+  }
+
+  return { statusCode: 400, body: { message: 'Invalid route' } };
+}
 
 /**
  * Handle PUT requests for member updates
  */
-const handlePut = async (event: APIGatewayProxyEvent): Promise<ApiResponse> => {
-    const userGroups = extractUserGroups(event);
-    const requiredGroups = ['MemberEditors', 'Deity', 'Administrator'];
-    const isAuthorized = userGroups.some(group => requiredGroups.includes(group));
+async function handlePut(event: APIGatewayProxyEvent, memberService: MemberService): Promise<{ statusCode: number; body: any }> {
+  const pathSegments = getPathSegments(event.path);
+  
+  // Check authentication
+  const authResult = checkMemberAuthorization(event);
+  if (authResult.statusCode !== 200) {
+    return { statusCode: authResult.statusCode, body: { message: authResult.message || 'Unauthorized' } };
+  }
 
-    if (!isAuthorized) {
-        return { statusCode: 403, body: { message: "Unauthorized" } };
+  if (pathSegments.length >= 3 && (pathSegments[0] === 'members' || pathSegments[0] === 'members-v2')) {
+    if (pathSegments[1] === 'member') {
+      const memberId = pathSegments[2];
+      
+      if (pathSegments.length === 3) {
+        // PUT /members/member/{id} - update member
+        return await updateMember(event, memberService, memberId);
+      } else if (pathSegments.length === 4 && pathSegments[3] === 'image') {
+        // PUT /members/member/{id}/image - update member image
+        return await updateMemberImage(event, memberService, memberId);
+      }
     }
+  }
 
-    let arPath = event.path.split('/');
-    arPath.shift();
-
-    switch (arPath[0]) {
-        case 'members':
-        case 'members-v2':
-            console.log('calling putMembers');
-            return await putMembers(event);
-        default:
-            return { statusCode: 405, body: { message: 'Method not allowed' } };
-    }
-};
+  return { statusCode: 400, body: { message: 'Invalid route' } };
+}
 
 /**
- * Handle member PUT operations
+ * Create a new member with image upload support
  */
-const putMembers = async (event: APIGatewayProxyEvent): Promise<ApiResponse> => {
-    let arPath = event.path.split('/');
-    arPath.shift();
+async function createMember(event: APIGatewayProxyEvent, memberService: MemberService): Promise<{ statusCode: number; body: any }> {
+  try {
+    let memberData: any;
+    let imageS3Key: string | undefined = undefined;
+    let imageValidationError: string | undefined = undefined;
 
-    switch(arPath[1]) {
-        case 'member':
-            console.log('calling putMember');
-            return await putMember(event);
-        default:
-            return { statusCode: 405, body: { message: 'Method not allowed' } };
-    }
-};
-
-/**
- * Update a specific member
- */
-const putMember = async (event: APIGatewayProxyEvent): Promise<ApiResponse> => {
-    let arPath = event.path.split('/');
-    arPath.shift();
-
-    const memberId = arPath[2];
-
-    if (arPath.length === 3) {
-        const objMember = JSON.parse(event.body || '{}');
-        if (!objMember.id) {
-            return {
-                statusCode: 400,
-                body: { message: "Missing member ID" }
-            };
-        }
-        return await putMemberById(event);
-    }
-
-    switch(arPath[3]) {
-        case 'image':
-            console.log('calling updateImage');
-            const uploadImageResponse = await updateImage(event, undefined);
-            if (uploadImageResponse.statusCode !== 200) {
-                return uploadImageResponse;
-            }
-            return { statusCode: 200, body: { image: uploadImageResponse.body.image } };
-        default:
-            return { statusCode: 405, body: { message: 'Method not allowed' } };
-    }
-};
-
-/**
- * Get characters for a specific user
- */
-const getCharacters = async (event: APIGatewayProxyEvent): Promise<ApiResponse> => {
-    const authClaims = event.requestContext?.authorizer?.claims;
-    const requestedSub = event.pathParameters?.sub;
-    const currentUserSub = authClaims?.sub;
-
-    if (requestedSub && requestedSub !== currentUserSub) {
-        if (!authClaims) {
-            return { statusCode: 403, body: { message: "Forbidden" } };
-        }
-
-        const groups = authClaims['cognito:groups'];
-        let isInGroup = false;
-
-        if (typeof groups === 'string') {
-            isInGroup = ['Administrator', 'Deity', 'MemberEditor'].includes(groups);
-        } else if (Array.isArray(groups)) {
-            isInGroup = groups.some(group => ['Administrator', 'Deity', 'MemberEditor'].includes(group));
-        }
-
-        if (!isInGroup) {
-            return { statusCode: 403, body: { message: "Forbidden" } };
-        }
-    }
-
-    const sub = requestedSub || currentUserSub;
-    if (!sub) {
-        return { statusCode: 400, body: { message: "User ID required" } };
-    }
-
-    return await getMembersByOwner(sub);
-};
-
-/**
- * Get sessions data for a member
- */
-const getSessions = async (event: APIGatewayProxyEvent): Promise<ApiResponse> => {
-    let arPath = event.path.split('/');
-    const memberId = event.pathParameters?.id;
+    // Check if this is a multipart form (with image)
+    const contentType = event.headers['Content-Type'] || event.headers['content-type'];
     
-    if (!memberId) {
-        return { statusCode: 400, body: { error: "Member ID is required" } };
-    }
-    
-    arPath.shift();
-    if (arPath[2] === 'count') {
-        return await countReportIdsByMemberId(memberId);
-    }
-    return await getSessionsByMemberId(memberId);
-};
-
-/**
- * Get sessions by member ID
- */
-const getSessionsByMemberId = async (memberId: string): Promise<ApiResponse> => {
-    let lastEvaluatedKey: any = null;
-    let items: any[] = [];
-
-    do {
-        const params = {
-            TableName: 'potp-idx-report-member',
-            IndexName: 'member-id-report-id-index',
-            KeyConditionExpression: '#memberId = :memberId',
-            ExpressionAttributeNames: {
-                '#memberId': 'member-id',
-            },
-            ExpressionAttributeValues: {
-                ':memberId': memberId,
-            },
-            ExclusiveStartKey: lastEvaluatedKey
-        };
-
-        try {
-            const { Items, LastEvaluatedKey } = await ddbDocClient.query(params);
-            items = items.concat(Items || []);
-            lastEvaluatedKey = LastEvaluatedKey;
-        } catch (err) {
-            console.error("Error querying DynamoDB:", err);
-            return {
-                statusCode: 500,
-                body: { error: "Failed to query DynamoDB", details: (err as Error).message }
-            };
-        }
-    } while (lastEvaluatedKey);
-
-    return { statusCode: 200, body: items };
-};
-
-/**
- * Count report IDs by member ID
- */
-const countReportIdsByMemberId = async (memberId: string): Promise<ApiResponse> => {
-    if (!memberId) {
-        console.error("memberId is undefined or null");
-        return { statusCode: 400, body: { error: "memberId is required" } };
-    }
-
-    let totalCount = 0;
-    let lastEvaluatedKey: any = null;
-
-    do {
-        const params: any = {
-            TableName: 'potp-idx-report-member',
-            IndexName: 'member-id-report-id-index',
-            KeyConditionExpression: '#memberId = :memberId',
-            ExpressionAttributeNames: { '#memberId': 'member-id' },
-            ExpressionAttributeValues: { ':memberId': memberId },
-            Select: 'COUNT',
-            ScanIndexForward: false
-        };
+    if (contentType && contentType.startsWith('multipart/form-data')) {
+      // Handle multipart form with image upload
+      const formData = await parseMultipartForm(event);
+      
+      const imageFile = formData['image'] as any;
+      memberData = JSON.parse(formData['data'] as string);
+      
+      if (imageFile && imageFile.content) {
+        const imageService = new ImageService();
+        const uploadResult = await imageService.validateAndUploadImageToS3(imageFile.content, imageFile.filename);
         
-        if (lastEvaluatedKey) {
-            params.ExclusiveStartKey = lastEvaluatedKey;
+        if (uploadResult.success) {
+          imageS3Key = uploadResult.imageUrl;
+        } else {
+          imageValidationError = uploadResult.error;
         }
+      }
+    } else {
+      // Handle JSON request
+      memberData = JSON.parse(event.body || '{}');
+    }
 
-        try {
-            const result = await ddbDocClient.query(params);
-            totalCount += result.Count || 0;
-            lastEvaluatedKey = result.LastEvaluatedKey;
-        } catch (err) {
-            console.error("Error querying DynamoDB:", err);
-            return {
-                statusCode: 500,
-                body: { error: "Failed to query DynamoDB", details: (err as Error).message }
-            };
-        }
-    } while (lastEvaluatedKey);
+    const requestData = sanitizeCreateMemberRequest(memberData);
+    
+    if (imageS3Key) {
+      requestData.image = imageS3Key;
+    }
 
-    return { statusCode: 200, body: { count: totalCount } };
-};
+    const serviceResponse = await memberService.createMember(requestData);
+    
+    if (serviceResponse.success) {
+      const responseBody: any = serviceResponse.data;
+      
+      if (imageValidationError) {
+        responseBody.warning = `Member created successfully, but image was not uploaded: ${imageValidationError}`;
+      }
+      
+      return { statusCode: 201, body: responseBody };
+    } else {
+      return convertServiceResponse(serviceResponse);
+    }
+  } catch (error) {
+    console.error('Error in createMember:', error);
+    return { statusCode: 400, body: { message: 'Invalid request data' } };
+  }
+}
 
 /**
- * Extract user groups from the event context
+ * Update an existing member
  */
-const extractUserGroups = (event: APIGatewayProxyEvent): string[] => {
-    return event.requestContext?.authorizer?.claims?.['cognito:groups']?.split(',') || [];
-};
+async function updateMember(event: APIGatewayProxyEvent, memberService: MemberService, memberId: string): Promise<{ statusCode: number; body: any }> {
+  try {
+    const requestBody = JSON.parse(event.body || '{}');
+    
+    if (!requestBody.id) {
+      return { statusCode: 400, body: { message: "Missing member ID" } };
+    }
+
+    const updates = sanitizeUpdateMemberRequest(requestBody);
+    const serviceResponse = await memberService.updateMember(memberId, updates);
+    
+    return convertServiceResponse(serviceResponse);
+  } catch (error) {
+    console.error('Error in updateMember:', error);
+    return { statusCode: 400, body: { message: 'Invalid JSON in request body' } };
+  }
+}
 
 /**
- * Helper function to extract path segments from the request path
+ * Update member image
  */
-const getPathSegments = (path: string): string[] => {
-    return path.split('/').filter(segment => segment.length > 0);
-};
+async function updateMemberImage(event: APIGatewayProxyEvent, memberService: MemberService, memberId: string): Promise<{ statusCode: number; body: any }> {
+  try {
+    // Get existing member to check for existing image
+    const memberResponse = await memberService.getMemberById(memberId);
+    if (!memberResponse.success) {
+      return convertServiceResponse(memberResponse);
+    }
+
+    const member = memberResponse.data!;
+    if (!member.image) {
+      return { statusCode: 400, body: { message: 'Member has no existing image to update' } };
+    }
+
+    const formData = await parseMultipartForm(event);
+    const imageFile = formData['image'] as any;
+    
+    if (!imageFile || !imageFile.content) {
+      return { statusCode: 400, body: { message: 'No image file provided' } };
+    }
+
+    const imageService = new ImageService();
+    const uploadResult = await imageService.updateImageInS3(imageFile.content, member.image, memberId);
+    
+    if (uploadResult.success) {
+      return { statusCode: 200, body: { image: uploadResult.imageUrl } };
+    } else {
+      return { statusCode: 500, body: { message: uploadResult.error } };
+    }
+  } catch (error) {
+    console.error('Error in updateMemberImage:', error);
+    return { statusCode: 500, body: { message: 'Failed to update image' } };
+  }
+}
+
+/**
+ * Parse multipart form data
+ */
+async function parseMultipartForm(event: APIGatewayProxyEvent): Promise<Record<string, any>> {
+  const { headers } = event;
+  const contentType = headers['Content-Type'] || headers['content-type'];
+
+  if (!contentType || !contentType.startsWith('multipart/form-data')) {
+    throw new Error('Invalid content-type, expected multipart/form-data');
+  }
+
+  const busboy = Busboy({ headers });
+  const formData: Record<string, any> = {};
+
+  await new Promise<void>((resolve, reject) => {
+    busboy.on('file', (name: string, file: NodeJS.ReadableStream, info: any) => {
+      const { filename, mimeType } = info;
+      const fileChunks: Buffer[] = [];
+
+      file.on('data', (data: Buffer) => {
+        fileChunks.push(data);
+      });
+
+      file.on('close', () => {
+        formData[name] = {
+          filename,
+          content: Buffer.concat(fileChunks),
+          contentType: mimeType,
+        };
+      });
+    });
+
+    busboy.on('field', (name: string, val: string) => {
+      formData[name] = val;
+    });
+
+    busboy.on('finish', () => {
+      resolve();
+    });
+
+    busboy.on('error', reject);
+
+    if (event.isBase64Encoded) {
+      busboy.end(Buffer.from(event.body || '', 'base64'));
+    } else {
+      busboy.end(event.body);
+    }
+  });
+
+  return formData;
+}

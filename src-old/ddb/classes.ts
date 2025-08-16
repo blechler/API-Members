@@ -10,7 +10,7 @@ interface ApiResponse {
     body: any;
 }
 
-export const getClasses = async (event?: APIGatewayProxyEvent): Promise<ApiResponse> => {
+export const getClasses = async (_event?: APIGatewayProxyEvent): Promise<ApiResponse> => {
     try {
         const { Items } = await ddbDocClient.scan({ TableName: 'potp-classes-v2' });
         return { statusCode: 200, body: Items };

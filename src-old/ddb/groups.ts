@@ -1,4 +1,3 @@
-import { APIGatewayProxyEvent } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
 
@@ -10,9 +9,9 @@ interface ApiResponse {
     body: any;
 }
 
-export const getAuras = async (event?: APIGatewayProxyEvent): Promise<ApiResponse> => {
+export const getGroups = async (): Promise<ApiResponse> => {
     try {
-        const { Items } = await ddbDocClient.scan({ TableName: 'potp-auras' });
+        const { Items } = await ddbDocClient.scan({ TableName: 'potp-member-groups-v2' });
         return { statusCode: 200, body: Items };
     } catch (err) {
         return {

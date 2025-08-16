@@ -60,7 +60,7 @@ const _busBoyThis = async (event: APIGatewayProxyEvent): Promise<FormData> => {
             });
         });
 
-        busboy.on('field', (name: string, val: string, info: any) => {
+        busboy.on('field', (name: string, val: string, _info: any) => {
             console.log(`Field [${name}]: value: %j`, val);
             formData[name] = val;
         });
@@ -140,7 +140,7 @@ export const updateImage = async (event: APIGatewayProxyEvent, objMember?: Membe
         const formData = await _busBoyThis(event);
 
         const imageFile = formData['image'] as FileData;
-        const memberData = JSON.parse(formData['data']);
+        // const memberData = JSON.parse(formData['data']); // unused
 
         if (!imageFile || !imageFile.content) {
             throw new Error('No image file provided in the request');
