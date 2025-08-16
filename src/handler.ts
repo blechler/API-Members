@@ -97,8 +97,6 @@ async function handleGet(event: APIGatewayProxyEvent, memberService: MemberServi
     return { statusCode: 400, body: { message: 'Invalid route' } };
   }
 
-  // Authentication is handled by API Gateway, but we can add additional authorization checks here if needed
-
   // Handle resource endpoints
   if (pathSegments.length === 2) {
     switch (pathSegments[1]) {
