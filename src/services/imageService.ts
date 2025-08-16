@@ -11,11 +11,50 @@ export interface ImageUploadResult {
   error?: string;
 }
 
+export interface FileType {
+  mimeType: string;
+  extension: string;
+  isVideo: boolean;
+}
+
 /**
- * Service class for image operations.
- * Handles image validation, processing, and S3 uploads.
+ * Service class for image and video operations.
+ * Handles image/video validation, processing, and S3 uploads.
  */
 export class ImageService {
+
+  /**
+   * Determine file type based on content analysis
+   */
+  private getFileType(_buffer: Buffer, originalFilename: string): FileType {
+    const filename = originalFilename.toLowerCase();
+    
+    // Check for video files
+    if (filename.endsWith('.mp4')) {
+      return {
+        mimeType: 'video/mp4',
+        extension: 'mp4',
+        isVideo: true
+      };
+    }
+    
+    // Default to image handling
+    return {
+      mimeType: 'image/jpeg',
+      extension: 'jpg',
+      isVideo: false
+    };
+  }
+
+  /**
+   * Validate video file size (1MB limit)
+   */
+  private validateVideoSize(buffer: Buffer): void {
+    const maxSize = 1024 * 1024; // 1MB
+    if (buffer.length > maxSize) {
+      throw new Error('Video file must be smaller than 1MB');
+    }
+  }
 
   /**
    * Resize image buffer to specified dimensions using Sharp
@@ -36,50 +75,59 @@ export class ImageService {
   }
 
   /**
-   * Validate and upload image to S3
+   * Validate and upload image or video to S3
    */
-  async validateAndUploadImageToS3(imageBuffer: Buffer, originalFilename: string): Promise<ImageUploadResult> {
+  async validateAndUploadImageToS3(fileBuffer: Buffer, originalFilename: string): Promise<ImageUploadResult> {
     try {
-      console.log(`Processing image upload: ${originalFilename}, size: ${imageBuffer.length} bytes`);
+      console.log(`Processing file upload: ${originalFilename}, size: ${fileBuffer.length} bytes`);
 
-      // Resize image to 300x500
-      const resizedImageBuffer = await this.resizeImage(imageBuffer, 300, 500);
-      
-      // Generate unique filename
-      const s3Key = `${uuidv4()}.jpg`;
+      const fileType = this.getFileType(fileBuffer, originalFilename);
+      let processedBuffer: Buffer;
+      let s3Key: string;
+
+      if (fileType.isVideo) {
+        // Handle video files
+        this.validateVideoSize(fileBuffer);
+        processedBuffer = fileBuffer; // No processing for videos
+        s3Key = `${uuidv4()}.${fileType.extension}`;
+      } else {
+        // Handle image files
+        processedBuffer = await this.resizeImage(fileBuffer, 300, 500);
+        s3Key = `${uuidv4()}.jpg`;
+      }
 
       const params = {
         Bucket: BUCKET_NAME,
         Key: s3Key,
-        Body: resizedImageBuffer,
-        ContentType: 'image/jpeg', // Always JPEG after processing
+        Body: processedBuffer,
+        ContentType: fileType.mimeType,
       };
 
       const command = new PutObjectCommand(params);
       await s3Client.send(command);
 
-      console.log(`Image uploaded successfully as: ${s3Key}`);
+      console.log(`File uploaded successfully as: ${s3Key}`);
       return {
         success: true,
         imageUrl: s3Key
       };
     } catch (error) {
-      console.error('Error uploading image:', error);
+      console.error('Error uploading file:', error);
       return {
         success: false,
-        error: `Failed to upload image: ${(error as Error).message}`
+        error: `Failed to upload file: ${(error as Error).message}`
       };
     }
   }
 
   /**
-   * Update existing image in S3
+   * Update existing image or video in S3
    */
-  async updateImageInS3(imageBuffer: Buffer, existingImageKey: string, memberId?: string): Promise<ImageUploadResult> {
+  async updateImageInS3(fileBuffer: Buffer, existingImageKey: string, memberId?: string): Promise<ImageUploadResult> {
     try {
-      console.log(`Updating existing image: ${existingImageKey}, size: ${imageBuffer.length} bytes`);
+      console.log(`Updating existing file: ${existingImageKey}, size: ${fileBuffer.length} bytes`);
 
-      // Check if existing image exists
+      // Check if existing file exists
       const headParams = {
         Bucket: BUCKET_NAME,
         Key: existingImageKey,
@@ -91,20 +139,29 @@ export class ImageService {
         if (err.name === 'NotFound') {
           return {
             success: false,
-            error: 'Image does not exist, cannot update'
+            error: 'File does not exist, cannot update'
           };
         }
         throw err;
       }
 
-      // Resize image to 300x500
-      const resizedImageBuffer = await this.resizeImage(imageBuffer, 300, 500);
+      const fileType = this.getFileType(fileBuffer, existingImageKey);
+      let processedBuffer: Buffer;
+
+      if (fileType.isVideo) {
+        // Handle video files
+        this.validateVideoSize(fileBuffer);
+        processedBuffer = fileBuffer; // No processing for videos
+      } else {
+        // Handle image files
+        processedBuffer = await this.resizeImage(fileBuffer, 300, 500);
+      }
 
       const params = {
         Bucket: BUCKET_NAME,
         Key: existingImageKey,
-        Body: resizedImageBuffer,
-        ContentType: 'image/jpeg', // Always JPEG after processing
+        Body: processedBuffer,
+        ContentType: fileType.mimeType,
         Metadata: {
           member: memberId || '',
         },
@@ -113,16 +170,16 @@ export class ImageService {
       const command = new PutObjectCommand(params);
       await s3Client.send(command);
 
-      console.log(`Image updated successfully: ${existingImageKey}`);
+      console.log(`File updated successfully: ${existingImageKey}`);
       return {
         success: true,
         imageUrl: existingImageKey
       };
     } catch (error) {
-      console.error('Error updating image:', error);
+      console.error('Error updating file:', error);
       return {
         success: false,
-        error: `Failed to update image: ${(error as Error).message}`
+        error: `Failed to update file: ${(error as Error).message}`
       };
     }
   }
