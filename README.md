@@ -112,11 +112,13 @@ src/
 
 ## Authentication & Authorization
 
-The API uses AWS Cognito for authentication with role-based access control:
+The API uses AWS Cognito for authentication with role-based access control. **All endpoints require authentication** - there are no public endpoints:
 
-- **Public Access**: Read-only access to resources (classes, races, auras)
-- **Member Access**: Read access to own characters and sessions
+- **Authenticated Users**: Read access to resources (classes, races, auras) and member data
+- **Member Access**: Read access to own characters and sessions  
 - **Editor Access**: Create and modify members (requires `MemberEditors`, `Deity`, or `Administrator` groups)
+
+Authentication is enforced at the API Gateway level, ensuring all requests are from authenticated users.
 
 ## Environment Setup
 

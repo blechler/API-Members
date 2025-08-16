@@ -88,6 +88,7 @@ async function handlePost(event: APIGatewayProxyEvent, memberService: MemberServ
 
 /**
  * Handle GET requests for member and resource retrieval
+ * All endpoints require authentication via API Gateway
  */
 async function handleGet(event: APIGatewayProxyEvent, memberService: MemberService): Promise<{ statusCode: number; body: any }> {
   const pathSegments = getPathSegments(event.path);
@@ -96,9 +97,10 @@ async function handleGet(event: APIGatewayProxyEvent, memberService: MemberServi
     return { statusCode: 400, body: { message: 'Invalid route' } };
   }
 
-  // Handle public endpoints without authentication
-  const publicEndpoints = ['classes', 'races', 'auras', 'groups'];
-  if (pathSegments.length === 2 && publicEndpoints.includes(pathSegments[1])) {
+  // Authentication is handled by API Gateway, but we can add additional authorization checks here if needed
+
+  // Handle resource endpoints
+  if (pathSegments.length === 2) {
     switch (pathSegments[1]) {
       case 'classes':
         const classesResponse = await memberService.getClasses();
@@ -115,9 +117,8 @@ async function handleGet(event: APIGatewayProxyEvent, memberService: MemberServi
     }
   }
 
-  // For member-specific endpoints, check authentication
   if (pathSegments.length === 1 && (pathSegments[0] === 'members' || pathSegments[0] === 'members-v2')) {
-    // GET /members - get all members (no auth required for reading)
+    // GET /members - get all members
     const serviceResponse = await memberService.getAllMembers();
     return convertServiceResponse(serviceResponse);
   }
