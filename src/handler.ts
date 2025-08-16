@@ -97,81 +97,90 @@ async function handleGet(event: APIGatewayProxyEvent, memberService: MemberServi
     return { statusCode: 400, body: { message: 'Invalid route' } };
   }
 
-  // Handle resource endpoints
-  if (pathSegments.length === 2) {
-    switch (pathSegments[1]) {
-      case 'classes':
-        const classesResponse = await memberService.getClasses();
-        return convertServiceResponse(classesResponse);
-      case 'races':
-        const racesResponse = await memberService.getRaces();
-        return convertServiceResponse(racesResponse);
-      case 'auras':
-        const aurasResponse = await memberService.getAuras();
-        return convertServiceResponse(aurasResponse);
-      case 'groups':
-        const groupsResponse = await memberService.getGroups();
-        return convertServiceResponse(groupsResponse);
-    }
-  }
-
   if (pathSegments.length === 1 && (pathSegments[0] === 'members' || pathSegments[0] === 'members-v2')) {
     // GET /members - get all members
     const serviceResponse = await memberService.getAllMembers();
     return convertServiceResponse(serviceResponse);
   }
 
-  if (pathSegments.length >= 2) {
-    const secondSegment = pathSegments[1];
-    
-    if (secondSegment === 'member') {
-      // GET /members/member/{id} - get member by ID
-      const memberId = pathSegments[2];
-      if (!memberId) {
-        return { statusCode: 400, body: { message: 'Member ID is required' } };
-      }
-      const serviceResponse = await memberService.getMemberById(memberId);
-      return convertServiceResponse(serviceResponse);
-    }
-    
-    if (secondSegment === 'characters') {
-      // GET /members/characters - get characters for user
-      const authResult = checkCharacterAccess(event, event.pathParameters?.sub);
-      if (authResult.statusCode !== 200) {
-        return { statusCode: authResult.statusCode, body: { message: authResult.message || 'Unauthorized' } };
-      }
-
-      const authClaims = event.requestContext?.authorizer?.claims;
-      const requestedSub = event.pathParameters?.sub;
-      const currentUserSub = authClaims?.sub;
-      const sub = requestedSub || currentUserSub;
-      
-      if (!sub) {
-        return { statusCode: 400, body: { message: 'User ID required' } };
-      }
-
-      const serviceResponse = await memberService.getMembersByOwner(sub);
-      return convertServiceResponse(serviceResponse);
-    }
-    
-    if (secondSegment === 'sessions') {
-      // GET /members/sessions/{memberId} or /members/sessions/{memberId}/count
-      const memberId = event.pathParameters?.id;
-      if (!memberId) {
-        return { statusCode: 400, body: { error: "Member ID is required" } };
-      }
-      
-      if (pathSegments.length === 4 && pathSegments[3] === 'count') {
-        const serviceResponse = await memberService.countSessionsByMemberId(memberId);
-        return convertServiceResponse(serviceResponse);
-      } else {
-        const serviceResponse = await memberService.getSessionsByMemberId(memberId);
-        return convertServiceResponse(serviceResponse);
-      }
-    }
+  // Handle all endpoints
+  switch (pathSegments[1]) {
+    case 'classes':
+      const classesResponse = await memberService.getClasses();
+      return convertServiceResponse(classesResponse);
+    case 'races':
+      const racesResponse = await memberService.getRaces();
+      return convertServiceResponse(racesResponse);
+    case 'auras':
+      const aurasResponse = await memberService.getAuras();
+      return convertServiceResponse(aurasResponse);
+    case 'groups':
+      const groupsResponse = await memberService.getGroups();
+      return convertServiceResponse(groupsResponse);
+    case 'member':
+      return await handleGetMember(event, memberService, pathSegments);
+    case 'characters':
+      return await handleGetCharacters(event, memberService);
+    case 'sessions':
+      return await handleGetSessions(event, memberService, pathSegments);
   }
 
   return { statusCode: 400, body: { message: 'Invalid route' } };
+}
+
+/**
+ * Handle GET requests for individual members
+ */
+async function handleGetMember(_event: APIGatewayProxyEvent, memberService: MemberService, pathSegments: string[]): Promise<{ statusCode: number; body: any }> {
+  // GET /members/member/{id} - get member by ID
+  const memberId = pathSegments[2];
+  if (!memberId) {
+    return { statusCode: 400, body: { message: 'Member ID is required' } };
+  }
+  const serviceResponse = await memberService.getMemberById(memberId);
+  return convertServiceResponse(serviceResponse);
+}
+
+/**
+ * Handle GET requests for member characters
+ */
+async function handleGetCharacters(event: APIGatewayProxyEvent, memberService: MemberService): Promise<{ statusCode: number; body: any }> {
+  // GET /members/characters - get characters for user
+  const authResult = checkCharacterAccess(event, event.pathParameters?.sub);
+  if (authResult.statusCode !== 200) {
+    return { statusCode: authResult.statusCode, body: { message: authResult.message || 'Unauthorized' } };
+  }
+
+  const authClaims = event.requestContext?.authorizer?.claims;
+  const requestedSub = event.pathParameters?.sub;
+  const currentUserSub = authClaims?.sub;
+  const sub = requestedSub || currentUserSub;
+  
+  if (!sub) {
+    return { statusCode: 400, body: { message: 'User ID required' } };
+  }
+
+  const serviceResponse = await memberService.getMembersByOwner(sub);
+  return convertServiceResponse(serviceResponse);
+}
+
+/**
+ * Handle GET requests for member sessions
+ */
+async function handleGetSessions(event: APIGatewayProxyEvent, memberService: MemberService, pathSegments: string[]): Promise<{ statusCode: number; body: any }> {
+  // GET /members/sessions/{memberId} or /members/sessions/{memberId}/count
+  const memberId = event.pathParameters?.id;
+  if (!memberId) {
+    return { statusCode: 400, body: { error: "Member ID is required" } };
+  }
+  
+  if (pathSegments.length === 4 && pathSegments[3] === 'count') {
+    const serviceResponse = await memberService.countSessionsByMemberId(memberId);
+    return convertServiceResponse(serviceResponse);
+  } else {
+    const serviceResponse = await memberService.getSessionsByMemberId(memberId);
+    return convertServiceResponse(serviceResponse);
+  }
 }
 
 /**
