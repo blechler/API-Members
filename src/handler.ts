@@ -46,6 +46,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       case 'PUT':
         result = await handlePut(event, memberService);
         break;
+      case 'DELETE':
+        result = await handleDelete(event, memberService);
+        break;
       case 'OPTIONS':
         result = { statusCode: 200, body: { message: 'OK' } };
         break;
@@ -213,6 +216,43 @@ async function handlePut(event: APIGatewayProxyEvent, memberService: MemberServi
 }
 
 /**
+ * Handle DELETE requests for member deletion
+ */
+async function handleDelete(event: APIGatewayProxyEvent, memberService: MemberService): Promise<{ statusCode: number; body: any }> {
+  const pathSegments = getPathSegments(event.path);
+  
+  // Check authentication
+  const authResult = checkMemberAuthorization(event);
+  if (authResult.statusCode !== 200) {
+    return { statusCode: authResult.statusCode, body: { message: authResult.message || 'Unauthorized' } };
+  }
+
+  if (pathSegments.length === 3 && pathSegments[0] === 'members' && pathSegments[1] === 'member') {
+    // DELETE /members/member/{id} - delete member
+    const memberId = pathSegments[2];
+    if (!memberId) {
+      return { statusCode: 400, body: { message: 'Member ID is required' } };
+    }
+    return await deleteMember(event, memberService, memberId);
+  }
+
+  return { statusCode: 400, body: { message: 'Invalid route' } };
+}
+
+/**
+ * Delete a member
+ */
+async function deleteMember(_event: APIGatewayProxyEvent, memberService: MemberService, memberId: string): Promise<{ statusCode: number; body: any }> {
+  try {
+    const serviceResponse = await memberService.deleteMember(memberId);
+    return convertServiceResponse(serviceResponse);
+  } catch (error) {
+    console.error('Error in deleteMember:', error);
+    return { statusCode: 500, body: { message: 'Failed to delete member' } };
+  }
+}
+
+/**
  * Create a new member with image upload support
  */
 async function createMember(event: APIGatewayProxyEvent, memberService: MemberService): Promise<{ statusCode: number; body: any }> {
@@ -276,19 +316,62 @@ async function createMember(event: APIGatewayProxyEvent, memberService: MemberSe
  */
 async function updateMember(event: APIGatewayProxyEvent, memberService: MemberService, memberId: string): Promise<{ statusCode: number; body: any }> {
   try {
-    const requestBody = JSON.parse(event.body || '{}');
+    let memberData: any;
+    let imageS3Key: string | undefined = undefined;
+    let imageValidationError: string | undefined = undefined;
+
+    // Check if this is a multipart form (with image)
+    const contentType = event.headers['Content-Type'] || event.headers['content-type'];
     
-    if (!requestBody.id) {
+    if (contentType && contentType.startsWith('multipart/form-data')) {
+      // Handle multipart form with image upload
+      const formData = await parseMultipartForm(event);
+      
+      const imageFile = formData['image'] as any;
+      memberData = JSON.parse(formData['data'] as string);
+      
+      if (imageFile && imageFile.content) {
+        const imageService = new ImageService();
+        const uploadResult = await imageService.validateAndUploadImageToS3(imageFile.content, imageFile.filename);
+        
+        if (uploadResult.success) {
+          imageS3Key = uploadResult.imageUrl;
+        } else {
+          imageValidationError = uploadResult.error;
+        }
+      }
+    } else {
+      // Handle JSON request
+      memberData = JSON.parse(event.body || '{}');
+    }
+
+    if (!memberData.id) {
       return { statusCode: 400, body: { message: "Missing member ID" } };
     }
 
-    const updates = sanitizeUpdateMemberRequest(requestBody);
+    const updates = sanitizeUpdateMemberRequest(memberData);
+    
+    // Add image key to updates if a new image was uploaded
+    if (imageS3Key) {
+      updates.image = imageS3Key;
+    }
+
     const serviceResponse = await memberService.updateMember(memberId, updates);
     
-    return convertServiceResponse(serviceResponse);
+    if (serviceResponse.success) {
+      const responseBody: any = serviceResponse.data;
+      
+      if (imageValidationError) {
+        responseBody.warning = `Member updated successfully, but image was not uploaded: ${imageValidationError}`;
+      }
+      
+      return { statusCode: 200, body: responseBody };
+    } else {
+      return convertServiceResponse(serviceResponse);
+    }
   } catch (error) {
     console.error('Error in updateMember:', error);
-    return { statusCode: 400, body: { message: 'Invalid JSON in request body' } };
+    return { statusCode: 400, body: { message: 'Invalid request data' } };
   }
 }
 

@@ -3,6 +3,7 @@ import { ClassRepository } from '../repositories/classRepository.js';
 import { RaceRepository } from '../repositories/raceRepository.js';
 import { AuraRepository } from '../repositories/auraRepository.js';
 import { GroupRepository } from '../repositories/groupRepository.js';
+import { ImageService } from './imageService.js';
 import { 
   MemberItem, 
   CreateMemberRequest, 
@@ -25,19 +26,22 @@ export class MemberService {
   private raceRepository: RaceRepository;
   private auraRepository: AuraRepository;
   private groupRepository: GroupRepository;
+  private imageService: ImageService;
 
   constructor(
     memberRepository?: MemberRepository,
     classRepository?: ClassRepository,
     raceRepository?: RaceRepository,
     auraRepository?: AuraRepository,
-    groupRepository?: GroupRepository
+    groupRepository?: GroupRepository,
+    imageService?: ImageService
   ) {
     this.memberRepository = memberRepository || new MemberRepository();
     this.classRepository = classRepository || new ClassRepository();
     this.raceRepository = raceRepository || new RaceRepository();
     this.auraRepository = auraRepository || new AuraRepository();
     this.groupRepository = groupRepository || new GroupRepository();
+    this.imageService = imageService || new ImageService();
   }
 
   /**
@@ -235,6 +239,66 @@ export class MemberService {
         error: {
           code: 'INTERNAL_ERROR',
           message: `Failed to update member: ${(error as Error).message}`
+        }
+      };
+    }
+  }
+
+  /**
+   * Delete member by ID
+   */
+  async deleteMember(id: string): Promise<ServiceResponse<{ message: string }>> {
+    console.log('memberService > deleteMember > id:', id);
+
+    try {
+      if (!id || id.trim().length === 0) {
+        return {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Member ID is required'
+          }
+        };
+      }
+
+      // Check if member exists
+      const existingMember = await this.memberRepository.getById(id);
+      if (!existingMember) {
+        return {
+          success: false,
+          error: {
+            code: 'MEMBER_NOT_FOUND',
+            message: 'Member not found'
+          }
+        };
+      }
+
+      // Delete associated image from S3 if it exists
+      if (existingMember.image) {
+        console.log(`Deleting associated image: ${existingMember.image}`);
+        const imageDeleteResult = await this.imageService.deleteImageFromS3(existingMember.image);
+        if (!imageDeleteResult.success) {
+          console.warn(`Failed to delete image ${existingMember.image}: ${imageDeleteResult.error}`);
+          // Continue with member deletion even if image deletion fails
+        } else {
+          console.log(`Successfully deleted image: ${existingMember.image}`);
+        }
+      }
+
+      // Delete member from database
+      await this.memberRepository.delete(id);
+      
+      return {
+        success: true,
+        data: { message: 'Member deleted successfully' }
+      };
+    } catch (error) {
+      console.error('memberService > deleteMember > error:', error);
+      return {
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: `Failed to delete member: ${(error as Error).message}`
         }
       };
     }

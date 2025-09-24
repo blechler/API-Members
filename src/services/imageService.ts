@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, HeadObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, HeadObjectCommand, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 
@@ -180,6 +180,32 @@ export class ImageService {
       return {
         success: false,
         error: `Failed to update file: ${(error as Error).message}`
+      };
+    }
+  }
+
+  /**
+   * Delete image or video from S3
+   */
+  async deleteImageFromS3(imageKey: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      console.log(`Deleting file from S3: ${imageKey}`);
+
+      const params = {
+        Bucket: BUCKET_NAME,
+        Key: imageKey,
+      };
+
+      const command = new DeleteObjectCommand(params);
+      await s3Client.send(command);
+
+      console.log(`File deleted successfully: ${imageKey}`);
+      return { success: true };
+    } catch (error) {
+      console.error('Error deleting file from S3:', error);
+      return {
+        success: false,
+        error: `Failed to delete file: ${(error as Error).message}`
       };
     }
   }

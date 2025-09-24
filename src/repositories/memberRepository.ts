@@ -2,6 +2,7 @@ import {
   PutCommand, 
   GetCommand, 
   UpdateCommand, 
+  DeleteCommand,
   ScanCommand,
   QueryCommand
 } from '@aws-sdk/lib-dynamodb';
@@ -224,6 +225,27 @@ export class MemberRepository {
       return result.Attributes as MemberItem;
     } catch (error) {
       console.error('memberRepository > update > error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete member by ID
+   */
+  async delete(id: string): Promise<void> {
+    console.log('memberRepository > delete > id:', id);
+    
+    try {
+      const command = new DeleteCommand({
+        TableName: TABLES.MEMBERS,
+        Key: { id }
+      });
+
+      await ddbDocClient.send(command);
+      
+      console.log('memberRepository > delete > success');
+    } catch (error) {
+      console.error('memberRepository > delete > error:', error);
       throw error;
     }
   }
