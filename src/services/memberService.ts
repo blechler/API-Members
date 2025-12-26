@@ -4,9 +4,14 @@ import { RaceRepository } from '../repositories/raceRepository.js';
 import { AuraRepository } from '../repositories/auraRepository.js';
 import { GroupRepository } from '../repositories/groupRepository.js';
 import { ImageService } from './imageService.js';
-import { 
-  MemberItem, 
-  CreateMemberRequest, 
+import {
+  syncMemberToPinecone,
+  deleteMemberFromPinecone,
+  isPineconeConfigured
+} from './pineconeService.js';
+import {
+  MemberItem,
+  CreateMemberRequest,
   UpdateMemberRequest,
   ServiceResponse,
   ClassItem,
@@ -64,7 +69,17 @@ export class MemberService {
 
       // Create the member
       const member = await this.memberRepository.create(request);
-      
+
+      // Sync to Pinecone (non-blocking, don't fail if sync fails)
+      if (isPineconeConfigured()) {
+        try {
+          await syncMemberToPinecone(member);
+        } catch (syncError) {
+          console.error('memberService > createMember > Pinecone sync failed:', syncError);
+          // Continue - member was created successfully
+        }
+      }
+
       return {
         success: true,
         data: member
@@ -227,7 +242,17 @@ export class MemberService {
       }
 
       const updatedMember = await this.memberRepository.update(id, updates);
-      
+
+      // Sync to Pinecone (non-blocking, don't fail if sync fails)
+      if (isPineconeConfigured()) {
+        try {
+          await syncMemberToPinecone(updatedMember);
+        } catch (syncError) {
+          console.error('memberService > updateMember > Pinecone sync failed:', syncError);
+          // Continue - member was updated successfully
+        }
+      }
+
       return {
         success: true,
         data: updatedMember
@@ -287,7 +312,17 @@ export class MemberService {
 
       // Delete member from database
       await this.memberRepository.delete(id);
-      
+
+      // Delete from Pinecone (non-blocking, don't fail if sync fails)
+      if (isPineconeConfigured()) {
+        try {
+          await deleteMemberFromPinecone(id);
+        } catch (syncError) {
+          console.error('memberService > deleteMember > Pinecone delete failed:', syncError);
+          // Continue - member was deleted successfully
+        }
+      }
+
       return {
         success: true,
         data: { message: 'Member deleted successfully' }

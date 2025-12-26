@@ -13,9 +13,12 @@
         "lint": "echo 'Linting not configured'"
     },
     "dependencies": {
+        "@aws-sdk/client-bedrock-runtime": "^3.490.0",
         "@aws-sdk/client-dynamodb": "^3.490.0",
         "@aws-sdk/client-s3": "^3.832.0",
+        "@aws-sdk/credential-providers": "^3.490.0",
         "@aws-sdk/lib-dynamodb": "^3.490.0",
+        "@pinecone-database/pinecone": "^4.0.0",
         "busboy": "^1.6.0",
         "sharp": "^0.33.0",
         "uuid": "^10.0.0"
